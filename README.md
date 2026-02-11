@@ -1,5 +1,5 @@
-# A CPU-optimized language model written in pure Rust. 
-It features a Mixture-of-Experts **GRU + RWKV hybrid architecture**.
+# A CPU-optimized language model. 
+Mixture-of-Experts **GRU + RWKV hybrid architecture**.
 ---
 
 ## Table of Contents
