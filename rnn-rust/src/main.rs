@@ -34,6 +34,7 @@ struct Config {
     gen_length: usize,
     log_every: usize,
     training_text: String,
+    training_file: String,
     rl_episodes: usize,
     rl_task: String,
     rl_learning_rate: f32,
@@ -58,7 +59,7 @@ impl Config {
             hidden_size: 32,
             num_layers: 1,
             embed_size: 16,
-            seq_length: 25,
+            seq_length: 180,
             learning_rate: 0.001,
             weight_decay: 0.01,
             epochs: 500,
@@ -68,10 +69,11 @@ impl Config {
             num_heads: 4,
             fast_mode: false,
             use_rwkv: true,
-            temperature: 0.8,
+            temperature: 0.3,
             gen_length: 100,
             log_every: 25,
             training_text: "hello world this is a modern rnn with rmsnorm residual connections gru gates and swiglu mlp learning to predict characters in vanilla javascript".to_string(),
+            training_file: String::new(),
             rl_episodes: 100,
             rl_task: "copy".to_string(),
             rl_learning_rate: 0.0001,
@@ -96,40 +98,41 @@ impl Config {
         for arg in env::args().skip(1) {
             let arg = arg.trim_start_matches("--");
             if let Some((key, value)) = arg.split_once('=') {
-                match key {
-                    "hiddenSize" => config.hidden_size = value.parse().unwrap_or(config.hidden_size),
-                    "numLayers" => config.num_layers = value.parse().unwrap_or(config.num_layers),
-                    "embedSize" => config.embed_size = value.parse().unwrap_or(config.embed_size),
-                    "seqLength" => config.seq_length = value.parse().unwrap_or(config.seq_length),
-                    "learningRate" => config.learning_rate = value.parse().unwrap_or(config.learning_rate),
-                    "weightDecay" => config.weight_decay = value.parse().unwrap_or(config.weight_decay),
+                match key.to_lowercase().as_str() {
+                    "hiddensize" => config.hidden_size = value.parse().unwrap_or(config.hidden_size),
+                    "numlayers" => config.num_layers = value.parse().unwrap_or(config.num_layers),
+                    "embedsize" => config.embed_size = value.parse().unwrap_or(config.embed_size),
+                    "seqlength" => config.seq_length = value.parse().unwrap_or(config.seq_length),
+                    "learningrate" => config.learning_rate = value.parse().unwrap_or(config.learning_rate),
+                    "weightdecay" => config.weight_decay = value.parse().unwrap_or(config.weight_decay),
                     "epochs" => config.epochs = value.parse().unwrap_or(config.epochs),
-                    "batchSize" => config.batch_size = value.parse().unwrap_or(config.batch_size),
-                    "numExperts" => config.num_experts = value.parse().unwrap_or(config.num_experts),
-                    "topK" => config.top_k = value.parse().unwrap_or(config.top_k),
-                    "numHeads" => config.num_heads = value.parse().unwrap_or(config.num_heads),
-                    "fastMode" => config.fast_mode = value == "true",
-                    "useRWKV" => config.use_rwkv = value == "true",
+                    "batchsize" => config.batch_size = value.parse().unwrap_or(config.batch_size),
+                    "numexperts" => config.num_experts = value.parse().unwrap_or(config.num_experts),
+                    "topk" => config.top_k = value.parse().unwrap_or(config.top_k),
+                    "numheads" => config.num_heads = value.parse().unwrap_or(config.num_heads),
+                    "fastmode" => config.fast_mode = value == "true",
+                    "userwkv" => config.use_rwkv = value == "true",
                     "temperature" => config.temperature = value.parse().unwrap_or(config.temperature),
-                    "genLength" => config.gen_length = value.parse().unwrap_or(config.gen_length),
-                    "logEvery" => config.log_every = value.parse().unwrap_or(config.log_every),
-                    "trainingText" => config.training_text = value.to_string(),
-                    "rlEpisodes" => config.rl_episodes = value.parse().unwrap_or(config.rl_episodes),
-                    "rlTask" => config.rl_task = value.to_string(),
-                    "rlLearningRate" => config.rl_learning_rate = value.parse().unwrap_or(config.rl_learning_rate),
-                    "doRL" => config.do_rl = value == "true",
-                    "saveEvery" => config.save_every = value.parse().unwrap_or(config.save_every),
-                    "savePath" => config.save_path = value.to_string(),
-                    "loadCheckpoint" => config.load_checkpoint = value.to_string(),
-                    "saveOnComplete" => config.save_on_complete = value == "true",
-                    "useBPE" => config.use_bpe = value == "true",
-                    "trainBPE" => config.train_bpe = value == "true",
-                    "bpeVocabSize" => config.bpe_vocab_size = value.parse().unwrap_or(config.bpe_vocab_size),
-                    "bpeSavePath" => config.bpe_save_path = value.to_string(),
-                    "bpeLoadPath" => config.bpe_load_path = value.to_string(),
-                    "bpeTrainingFile" => config.bpe_training_file = value.to_string(),
-                    "bpeTrainingText" => config.bpe_training_text = value.to_string(),
-                    "bpeMinFrequency" => config.bpe_min_frequency = value.parse().unwrap_or(config.bpe_min_frequency),
+                    "genlength" => config.gen_length = value.parse().unwrap_or(config.gen_length),
+                    "logevery" => config.log_every = value.parse().unwrap_or(config.log_every),
+                    "trainingtext" => config.training_text = value.to_string(),
+                    "trainingfile" => config.training_file = value.to_string(),
+                    "rlepisodes" => config.rl_episodes = value.parse().unwrap_or(config.rl_episodes),
+                    "rltask" => config.rl_task = value.to_string(),
+                    "rllearningrate" => config.rl_learning_rate = value.parse().unwrap_or(config.rl_learning_rate),
+                    "dorl" => config.do_rl = value == "true",
+                    "saveevery" => config.save_every = value.parse().unwrap_or(config.save_every),
+                    "savepath" => config.save_path = value.to_string(),
+                    "loadcheckpoint" => config.load_checkpoint = value.to_string(),
+                    "saveoncomplete" => config.save_on_complete = value == "true",
+                    "usebpe" => config.use_bpe = value == "true",
+                    "trainbpe" => config.train_bpe = value == "true",
+                    "bpevocabsize" => config.bpe_vocab_size = value.parse().unwrap_or(config.bpe_vocab_size),
+                    "bpesavepath" => config.bpe_save_path = value.to_string(),
+                    "bpeloadpath" => config.bpe_load_path = value.to_string(),
+                    "bpetrainingfile" => config.bpe_training_file = value.to_string(),
+                    "bpetrainingtext" => config.bpe_training_text = value.to_string(),
+                    "bpeminfrequency" => config.bpe_min_frequency = value.parse().unwrap_or(config.bpe_min_frequency),
                     _ => {}
                 }
             }
@@ -791,7 +794,7 @@ impl Graph {
 
                 TensorOp::Sigmoid { a } => {
                     let g = self.nodes[i].grad.clone();
-                    let od = &self.nodes[i].data;
+                    let od = self.nodes[i].data.clone();
                     for j in 0..g.len() {
                         let s = od[j];
                         self.nodes[a.0].grad[j] += g[j] * s * (1.0 - s);
@@ -800,7 +803,7 @@ impl Graph {
 
                 TensorOp::Tanh { a } => {
                     let g = self.nodes[i].grad.clone();
-                    let od = &self.nodes[i].data;
+                    let od = self.nodes[i].data.clone();
                     for j in 0..g.len() {
                         let t = od[j];
                         self.nodes[a.0].grad[j] += g[j] * (1.0 - t * t);
@@ -819,7 +822,7 @@ impl Graph {
 
                 TensorOp::Exp { a } => {
                     let g = self.nodes[i].grad.clone();
-                    let od = &self.nodes[i].data;
+                    let od = self.nodes[i].data.clone();
                     for j in 0..g.len() { self.nodes[a.0].grad[j] += g[j] * od[j]; }
                 }
 
@@ -837,7 +840,7 @@ impl Graph {
 
                 TensorOp::Sqrt { a } => {
                     let g = self.nodes[i].grad.clone();
-                    let od = &self.nodes[i].data;
+                    let od = self.nodes[i].data.clone();
                     for j in 0..g.len() { self.nodes[a.0].grad[j] += g[j] * 0.5 / od[j]; }
                 }
 
@@ -1063,7 +1066,8 @@ impl SwiGLUExpert {
     }
 
     fn forward(&self, x: TID, g: &mut Graph) -> TID {
-        let gate = g.silu(g.matmul(x, self.w_gate));
+        let mg = g.matmul(x, self.w_gate);
+        let gate = g.silu(mg);
         let up = g.matmul(x, self.w_up);
         let gated = g.mul(gate, up);
         g.matmul(gated, self.w_down)
@@ -1106,7 +1110,7 @@ impl MoE {
             let router = self.router.unwrap();
             let rl = g.matmul(normed, router);
             let rl_data = g.data(rl).to_vec();
-            let ne = self.num_experts - 1;
+            let _ne = self.num_experts - 1;
 
             // Softmax routing probabilities
             let mx = vec_max(&rl_data);
@@ -1192,7 +1196,7 @@ impl MoE {
                 ).collect();
 
                 // Insert parallel results back into graph (needed for backprop through experts)
-                for (eidx, nw, out_data) in expert_outputs {
+                for (eidx, nw, _out_data) in expert_outputs {
                     let ei = eidx + 1;
                     // We need graph nodes for backprop, so replay the forward through the graph
                     let expert_out = self.experts[ei].forward(normed, g);
@@ -1306,18 +1310,24 @@ impl ModernGRUCell {
         let hn = self.hidden_norm.forward(h_prev, g);
 
         // z = sigmoid(xn @ Wz + hn @ Uz + bz)
-        let z_pre = g.add(g.matmul(xn, self.wz), g.matmul(hn, self.uz));
+        let z_wx = g.matmul(xn, self.wz);
+        let z_uh = g.matmul(hn, self.uz);
+        let z_pre = g.add(z_wx, z_uh);
         let z_pre = g.broadcast_add(z_pre, self.bz);
         let z = g.sigmoid(z_pre);
 
         // r = sigmoid(xn @ Wr + hn @ Ur + br)
-        let r_pre = g.add(g.matmul(xn, self.wr), g.matmul(hn, self.ur));
+        let r_wx = g.matmul(xn, self.wr);
+        let r_uh = g.matmul(hn, self.ur);
+        let r_pre = g.add(r_wx, r_uh);
         let r_pre = g.broadcast_add(r_pre, self.br);
         let r = g.sigmoid(r_pre);
 
         // h_cand = tanh(xn @ Wh + (r*hn) @ Uh + bh)
         let rh = g.mul(r, hn);
-        let h_pre = g.add(g.matmul(xn, self.wh), g.matmul(rh, self.uh));
+        let h_wx = g.matmul(xn, self.wh);
+        let h_uh = g.matmul(rh, self.uh);
+        let h_pre = g.add(h_wx, h_uh);
         let h_pre = g.broadcast_add(h_pre, self.bh);
         let mut h_cand = g.tanh_op(h_pre);
 
@@ -1340,17 +1350,27 @@ impl ModernGRUCell {
             let omv = g.one_minus(mv);
             let omr = g.one_minus(mr);
 
-            let sk = g.add(g.mul(omk, x_prev_tid), g.mul(mk, h_cand));
-            let sv = g.add(g.mul(omv, x_prev_tid), g.mul(mv, h_cand));
-            let sr = g.add(g.mul(omr, x_prev_tid), g.mul(mr, h_cand));
+            let sk_1 = g.mul(omk, x_prev_tid);
+            let sk_2 = g.mul(mk, h_cand);
+            let sk = g.add(sk_1, sk_2);
+
+            let sv_1 = g.mul(omv, x_prev_tid);
+            let sv_2 = g.mul(mv, h_cand);
+            let sv = g.add(sv_1, sv_2);
+
+            let sr_1 = g.mul(omr, x_prev_tid);
+            let sr_2 = g.mul(mr, h_cand);
+            let sr = g.add(sr_1, sr_2);
 
             // K, V projections — remain in graph for gradient flow
             let k = g.matmul(sk, self.wk.unwrap());
             let v = g.matmul(sv, self.wv.unwrap());
 
             // Dynamic decay and bonus projections — remain in graph
-            let da = g.tanh_op(g.matmul(h_cand, self.time_decay_proj.unwrap()));
-            let fa = g.tanh_op(g.matmul(h_cand, self.time_first_proj.unwrap()));
+            let da_mm = g.matmul(h_cand, self.time_decay_proj.unwrap());
+            let da = g.tanh_op(da_mm);
+            let fa_mm = g.matmul(h_cand, self.time_first_proj.unwrap());
+            let fa = g.tanh_op(fa_mm);
 
             // Clamp k for numerical stability
             let k_clamped = g.clamp_op(k, -10.0, 10.0);
@@ -1378,7 +1398,8 @@ impl ModernGRUCell {
             let pd_tid = g.constant(kv.den_state.clone(), 1, hs);
 
             // WKV attention: wkv = (exp_uk * v + pn) / (exp_uk + pd)
-            let numerator = g.add(g.mul(exp_uk, v), pn_tid);
+            let num_term = g.mul(exp_uk, v);
+            let numerator = g.add(num_term, pn_tid);
             let denominator = g.add(exp_uk, pd_tid);
             let wkv_tid = g.div_elem(numerator, denominator);
 
@@ -1409,7 +1430,9 @@ impl ModernGRUCell {
 
         // GRU update: h = (1-z)*h_prev + z*h_cand
         let omz = g.one_minus(z);
-        let h_new = g.add(g.mul(omz, h_prev), g.mul(z, h_cand));
+        let h_part1 = g.mul(omz, h_prev);
+        let h_part2 = g.mul(z, h_cand);
+        let h_new = g.add(h_part1, h_part2);
 
         GRUCellResult { h: h_new, kv_state: new_kv }
     }
@@ -1850,8 +1873,20 @@ struct BPEFile {
 
 fn train_bpe(config: &Config) {
     println!("\n{}\n   BPE TOKENIZER TRAINING MODE\n{}\n", "=".repeat(70), "=".repeat(70));
-    let mut tt = if config.bpe_training_text.is_empty() { config.training_text.clone() } else { config.bpe_training_text.clone() };
-    if !config.bpe_training_file.is_empty() && std::path::Path::new(&config.bpe_training_file).exists() { tt = fs::read_to_string(&config.bpe_training_file).unwrap(); }
+    
+    // Priority: bpe_training_file > bpe_training_text > training_file > training_text
+    let mut tt = config.training_text.clone();
+    
+    if !config.training_file.is_empty() && std::path::Path::new(&config.training_file).exists() {
+        if let Ok(content) = fs::read_to_string(&config.training_file) { tt = content; }
+    }
+    
+    if !config.bpe_training_text.is_empty() { tt = config.bpe_training_text.clone(); }
+    
+    if !config.bpe_training_file.is_empty() && std::path::Path::new(&config.bpe_training_file).exists() { 
+        if let Ok(content) = fs::read_to_string(&config.bpe_training_file) { tt = content; }
+    }
+
     println!("Text: {} chars | Target: {} | Output: {}\n", tt.len(), config.bpe_vocab_size, config.bpe_save_path);
     let mut tok = BPETokenizer::new(config.bpe_vocab_size);
     tok.train(&tt, config.bpe_min_frequency, true); tok.save(&config.bpe_save_path); tok.print_stats();
@@ -1866,12 +1901,24 @@ fn train_bpe(config: &Config) {
 fn train(config: &Config) -> (Graph, ModernRNN, TrainingData, ParamSet) {
     println!("\n{}\n   MODERN RNN — VECTORIZED AUTODIFF + SIMD + RAYON (2026)\n{}\n", "=".repeat(70), "=".repeat(70));
     let mut rng = rand::thread_rng();
+
+    let mut training_text = config.training_text.clone();
+    if !config.training_file.is_empty() && std::path::Path::new(&config.training_file).exists() {
+        match fs::read_to_string(&config.training_file) {
+            Ok(content) => {
+                training_text = content;
+                println!("Loaded training text from file: {} ({} chars)", config.training_file, training_text.len());
+            }
+            Err(e) => println!("Error reading training file: {}", e),
+        }
+    }
+
     let (data, _tok) = if config.use_bpe {
         let tok = if !config.bpe_load_path.is_empty() && std::path::Path::new(&config.bpe_load_path).exists() {
             BPETokenizer::load_from_file(&config.bpe_load_path)
-        } else { let mut t = BPETokenizer::new(config.bpe_vocab_size); t.train(&config.training_text, config.bpe_min_frequency, true); t.save(&config.bpe_save_path); t };
-        let d = tok.prepare_data(&config.training_text); println!("Tokenizer: BPE (vocab={})", tok.vocab_size()); (d, Some(tok))
-    } else { (prepare_char_data(&config.training_text), None) };
+        } else { let mut t = BPETokenizer::new(config.bpe_vocab_size); t.train(&training_text, config.bpe_min_frequency, true); t.save(&config.bpe_save_path); t };
+        let d = tok.prepare_data(&training_text); println!("Tokenizer: BPE (vocab={})", tok.vocab_size()); (d, Some(tok))
+    } else { (prepare_char_data(&training_text), None) };
 
     println!("\nConfig: hidden={} layers={} embed={} heads={} experts={} topk={} lr={} wd={} epochs={} batch={} seq={} fast={} rwkv={} vocab={}",
         config.hidden_size, config.num_layers, config.embed_size, config.num_heads, config.num_experts, config.top_k,
