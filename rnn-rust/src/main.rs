@@ -17,6 +17,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 struct Config {
+    command: String,
     hidden_size: usize,
     num_layers: usize,
     embed_size: usize,
@@ -32,6 +33,7 @@ struct Config {
     use_rwkv: bool,
     temperature: f32,
     gen_length: usize,
+    prompt: String,
     log_every: usize,
     training_text: String,
     training_file: String,
@@ -56,6 +58,7 @@ struct Config {
 impl Config {
     fn default_config() -> Self {
         Config {
+            command: String::new(),
             hidden_size: 32,
             num_layers: 1,
             embed_size: 16,
@@ -71,6 +74,7 @@ impl Config {
             use_rwkv: true,
             temperature: 0.3,
             gen_length: 100,
+            prompt: String::new(),
             log_every: 25,
             training_text: "hello world this is a modern rnn with rmsnorm residual connections gru gates and swiglu mlp learning to predict characters in vanilla javascript".to_string(),
             training_file: String::new(),
@@ -96,6 +100,12 @@ impl Config {
     fn from_args() -> Self {
         let mut config = Self::default_config();
         for arg in env::args().skip(1) {
+            if !arg.starts_with("--") {
+                if config.command.is_empty() {
+                    config.command = arg.to_lowercase();
+                }
+                continue;
+            }
             let arg = arg.trim_start_matches("--");
             if let Some((key, value)) = arg.split_once('=') {
                 match key.to_lowercase().as_str() {
@@ -114,6 +124,7 @@ impl Config {
                     "userwkv" => config.use_rwkv = value == "true",
                     "temperature" => config.temperature = value.parse().unwrap_or(config.temperature),
                     "genlength" => config.gen_length = value.parse().unwrap_or(config.gen_length),
+                    "prompt" => config.prompt = value.to_string(),
                     "logevery" => config.log_every = value.parse().unwrap_or(config.log_every),
                     "trainingtext" => config.training_text = value.to_string(),
                     "trainingfile" => config.training_file = value.to_string(),
@@ -1895,13 +1906,10 @@ fn train_bpe(config: &Config) {
 }
 
 // ============================================================================
-// TRAINING
+// DATA & MODEL SETUP (shared by all commands)
 // ============================================================================
 
-fn train(config: &Config) -> (Graph, ModernRNN, TrainingData, ParamSet) {
-    println!("\n{}\n   MODERN RNN — VECTORIZED AUTODIFF + SIMD + RAYON (2026)\n{}\n", "=".repeat(70), "=".repeat(70));
-    let mut rng = rand::thread_rng();
-
+fn setup_data(config: &Config) -> (TrainingData, Option<BPETokenizer>) {
     let mut training_text = config.training_text.clone();
     if !config.training_file.is_empty() && std::path::Path::new(&config.training_file).exists() {
         match fs::read_to_string(&config.training_file) {
@@ -1913,20 +1921,28 @@ fn train(config: &Config) -> (Graph, ModernRNN, TrainingData, ParamSet) {
         }
     }
 
-    let (data, _tok) = if config.use_bpe {
+    if config.use_bpe {
         let tok = if !config.bpe_load_path.is_empty() && std::path::Path::new(&config.bpe_load_path).exists() {
             BPETokenizer::load_from_file(&config.bpe_load_path)
-        } else { let mut t = BPETokenizer::new(config.bpe_vocab_size); t.train(&training_text, config.bpe_min_frequency, true); t.save(&config.bpe_save_path); t };
-        let d = tok.prepare_data(&training_text); println!("Tokenizer: BPE (vocab={})", tok.vocab_size()); (d, Some(tok))
-    } else { (prepare_char_data(&training_text), None) };
+        } else {
+            let mut t = BPETokenizer::new(config.bpe_vocab_size);
+            t.train(&training_text, config.bpe_min_frequency, true);
+            t.save(&config.bpe_save_path);
+            t
+        };
+        let d = tok.prepare_data(&training_text);
+        println!("Tokenizer: BPE (vocab={})", tok.vocab_size());
+        (d, Some(tok))
+    } else {
+        (prepare_char_data(&training_text), None)
+    }
+}
 
-    println!("\nConfig: hidden={} layers={} embed={} heads={} experts={} topk={} lr={} wd={} epochs={} batch={} seq={} fast={} rwkv={} vocab={}",
-        config.hidden_size, config.num_layers, config.embed_size, config.num_heads, config.num_experts, config.top_k,
-        config.learning_rate, config.weight_decay, config.epochs, config.batch_size, config.seq_length, config.fast_mode, config.use_rwkv, data.vocab_size);
-    println!("Engine: Vectorized Tensor Autodiff + SIMD + Rayon\n");
-
+fn setup_model(config: &Config, data: &TrainingData) -> (Graph, ModernRNN, ParamSet, AdamW, usize) {
+    let mut rng = rand::thread_rng();
     let mut g = Graph::new();
     let mut start_epoch = 0usize;
+
     let rnn = if !config.load_checkpoint.is_empty() && std::path::Path::new(&config.load_checkpoint).exists() {
         let info = ModernRNN::peek_checkpoint(&config.load_checkpoint);
         let c = &info.config;
@@ -1952,6 +1968,25 @@ fn train(config: &Config) -> (Graph, ModernRNN, TrainingData, ParamSet) {
 
     let tp = rnn.total_params(&g); let ap = rnn.active_params(&g);
     println!("Total params: {} | Active: {} ({:.1}%)", tp, ap, ap as f32 / tp as f32 * 100.0);
+
+    (g, rnn, ps, opt, start_epoch)
+}
+
+// ============================================================================
+// TRAINING
+// ============================================================================
+
+fn run_train(config: &Config) {
+    println!("\n{}\n   MODERN RNN — VECTORIZED AUTODIFF + SIMD + RAYON (2026)\n{}\n", "=".repeat(70), "=".repeat(70));
+
+    let (data, _tok) = setup_data(config);
+    println!("\nConfig: hidden={} layers={} embed={} heads={} experts={} topk={} lr={} wd={} epochs={} batch={} seq={} fast={} rwkv={} vocab={}",
+        config.hidden_size, config.num_layers, config.embed_size, config.num_heads, config.num_experts, config.top_k,
+        config.learning_rate, config.weight_decay, config.epochs, config.batch_size, config.seq_length, config.fast_mode, config.use_rwkv, data.vocab_size);
+    println!("Engine: Vectorized Tensor Autodiff + SIMD + Rayon\n");
+
+    let (mut g, rnn, mut ps, mut opt, start_epoch) = setup_model(config, &data);
+    let mut rng = rand::thread_rng();
 
     let mut seqs: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
     let mut i = 0;
@@ -2010,7 +2045,6 @@ fn train(config: &Config) -> (Graph, ModernRNN, TrainingData, ParamSet) {
     println!("Generating sample...\n");
     g.reset();
     generate(&rnn, &data, config, &mut g, &mut rng);
-    (g, rnn, data, ps)
 }
 
 // ============================================================================
@@ -2191,27 +2225,154 @@ impl RLVR {
 }
 
 // ============================================================================
+// INFERENCE — standalone generation from a trained model
+// ============================================================================
+
+fn run_inference(config: &Config) {
+    println!("\n{}\n   INFERENCE MODE\n{}\n", "=".repeat(70), "=".repeat(70));
+
+    if config.load_checkpoint.is_empty() {
+        eprintln!("Error: --loadCheckpoint is required for inference mode.");
+        eprintln!("Usage: rnn-rust inference --loadCheckpoint=./checkpoint.bin [--useBPE=true --bpeLoadPath=./tokenizer.json]");
+        std::process::exit(1);
+    }
+
+    let (data, _tok) = setup_data(config);
+    let (mut g, rnn, _ps, _opt, _) = setup_model(config, &data);
+    let mut rng = rand::thread_rng();
+
+    if !config.prompt.is_empty() {
+        let len = config.gen_length;
+        let mut hs: Option<HiddenState> = None;
+
+        // Feed prompt through the model to build up hidden state
+        for ch in config.prompt.chars() {
+            let idx = *data.char_to_idx.get(&ch.to_string()).unwrap_or(&0);
+            g.reset();
+            let r = rnn.forward(&[idx], hs, &mut g);
+            hs = Some(r.final_hidden);
+        }
+
+        // Start generating from the last prompt character
+        let last_ch = config.prompt.chars().last().unwrap_or(' ');
+        let mut ci = *data.char_to_idx.get(&last_ch.to_string()).unwrap_or(&0);
+        let mut gen = config.prompt.clone();
+
+        for _ in 0..len {
+            g.reset();
+            let r = rnn.forward(&[ci], hs, &mut g);
+            hs = Some(r.final_hidden);
+            let logits = g.data(r.outputs[0]).to_vec();
+            let sc: Vec<f32> = logits.iter().map(|l| l / config.temperature).collect();
+            let mx = vec_max(&sc);
+            let ex: Vec<f32> = sc.iter().map(|l| (l - mx).exp()).collect();
+            let sm: f32 = ex.iter().sum();
+            let pr: Vec<f32> = ex.iter().map(|e| e / sm).collect();
+            let mut rv: f32 = rng.gen(); let mut idx = 0;
+            for j in 0..pr.len() { rv -= pr[j]; if rv <= 0.0 { idx = j; break; } }
+            ci = idx;
+            gen.push_str(data.idx_to_char.get(&idx).map(|s| s.as_str()).unwrap_or(" "));
+        }
+        println!("Prompt: \"{}\"\nTemperature: {}\nGenerated ({} tokens):\n{}\n{}\n{}\n",
+            config.prompt, config.temperature, len, "-".repeat(70), gen, "-".repeat(70));
+    } else {
+        g.reset();
+        generate(&rnn, &data, config, &mut g, &mut rng);
+    }
+}
+
+// ============================================================================
+// RLVR — standalone reinforcement learning on a pre-trained model
+// ============================================================================
+
+fn run_rlvr(config: &Config) {
+    println!("\n{}\n   RLVR MODE — Reinforcement Learning with Verifiable Rewards\n{}\n", "=".repeat(70), "=".repeat(70));
+
+    if config.load_checkpoint.is_empty() {
+        eprintln!("Error: --loadCheckpoint is required for RLVR mode.");
+        eprintln!("Usage: rnn-rust rlvr --loadCheckpoint=./checkpoint.bin --rlTask=copy [--rlEpisodes=100]");
+        std::process::exit(1);
+    }
+
+    let (data, _tok) = setup_data(config);
+    let (mut g, rnn, mut ps, _opt, _) = setup_model(config, &data);
+
+    let rlvr = RLVR::new(config);
+    let mut rl_opt = AdamW::new(config.rl_learning_rate, config.weight_decay);
+    rlvr.train_rl(&rnn, &data, &config.rl_task, config.rl_episodes, 10, &mut g, &mut rl_opt, &mut ps);
+
+    println!("Post-RL Generation:");
+    g.reset();
+    let mut rng = rand::thread_rng();
+    generate(&rnn, &data, config, &mut g, &mut rng);
+
+    if config.save_on_complete {
+        rnn.save_checkpoint(&config.save_path,
+            serde_json::json!({"mode": "rlvr", "task": &config.rl_task, "episodes": config.rl_episodes, "completed": true}),
+            rl_opt.t, &g, &ps);
+    }
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
 fn main() {
     let config = Config::from_args();
-    println!("\nUsage: rnn-rust [options]");
-    println!("Options: --hiddenSize=32 --epochs=500 --learningRate=0.001 etc.");
-    println!("RL: --doRL=true --rlTask=copy --rlEpisodes=100");
-    println!("Checkpoint: --savePath=./model.bin --saveEvery=50 --loadCheckpoint=./model.bin");
-    println!("BPE: --trainBPE=true --bpeVocabSize=512 --useBPE=true --bpeLoadPath=./tokenizer.json\n");
 
-    if config.train_bpe { train_bpe(&config); return; }
+    match config.command.as_str() {
+        "train-tokenizer" | "tokenizer" => {
+            train_bpe(&config);
+        }
+        "train" => {
+            run_train(&config);
+        }
+        "inference" | "generate" | "infer" => {
+            run_inference(&config);
+        }
+        "rlvr" | "rl" => {
+            run_rlvr(&config);
+        }
+        _ => {
+            println!("\n{}\n   MODERN RNN — Rust (2026)\n{}", "=".repeat(70), "=".repeat(70));
+            println!("\nUsage: rnn-rust <command> [options]\n");
+            println!("Commands:");
+            println!("  train-tokenizer  Train a BPE tokenizer on text data");
+            println!("  train            Train the RNN model");
+            println!("  inference        Generate text from a trained model");
+            println!("  rlvr             Run RLVR on a pre-trained model\n");
+            println!("Tokenizer Examples:");
+            println!("  rnn-rust train-tokenizer --bpeTrainingFile=./data.txt --bpeVocabSize=512");
+            println!("  rnn-rust train-tokenizer --bpeTrainingText=\"hello world\" --bpeSavePath=./tok.json\n");
+            println!("Training Examples:");
+            println!("  rnn-rust train --trainingFile=./data.txt --epochs=500");
+            println!("  rnn-rust train --useBPE=true --bpeLoadPath=./tokenizer.json --trainingFile=./data.txt");
+            println!("  rnn-rust train --loadCheckpoint=./checkpoint.bin --epochs=1000  (resume)\n");
+            println!("Inference Examples:");
+            println!("  rnn-rust inference --loadCheckpoint=./checkpoint.bin --trainingFile=./data.txt");
+            println!("  rnn-rust inference --loadCheckpoint=./checkpoint.bin --useBPE=true --bpeLoadPath=./tokenizer.json");
+            println!("  rnn-rust inference --loadCheckpoint=./checkpoint.bin --prompt=\"hello\" --temperature=0.5 --genLength=200\n");
+            println!("RLVR Examples:");
+            println!("  rnn-rust rlvr --loadCheckpoint=./checkpoint.bin --rlTask=copy --rlEpisodes=100");
+            println!("  rnn-rust rlvr --loadCheckpoint=./checkpoint.bin --rlTask=arithmetic --rlEpisodes=200\n");
+            println!("All Options:");
+            println!("  Model:      --hiddenSize=32 --numLayers=1 --embedSize=16 --numHeads=4 --numExperts=4");
+            println!("  Training:   --epochs=500 --batchSize=4 --learningRate=0.001 --weightDecay=0.01 --seqLength=180");
+            println!("  Data:       --trainingFile=./data.txt --trainingText=\"...\"");
+            println!("  Checkpoint: --savePath=./checkpoint.bin --saveEvery=50 --loadCheckpoint=./model.bin");
+            println!("  Tokenizer:  --useBPE=true --bpeLoadPath=./tokenizer.json --bpeVocabSize=512");
+            println!("  Inference:  --temperature=0.3 --genLength=100 --prompt=\"hello\"");
+            println!("  RLVR:       --rlTask=copy --rlEpisodes=100 --rlLearningRate=0.0001");
 
-    let (mut g, rnn, data, mut ps) = train(&config);
-
-    if config.do_rl {
-        let rlvr = RLVR::new(&config);
-        let mut rl_opt = AdamW::new(config.rl_learning_rate, 0.001);
-        rlvr.train_rl(&rnn, &data, &config.rl_task, config.rl_episodes, 10, &mut g, &mut rl_opt, &mut ps);
-        println!("Post-RL Generation:"); g.reset();
-        let mut rng = rand::thread_rng();
-        generate(&rnn, &data, &config, &mut g, &mut rng);
+            // Legacy flag support (no subcommand)
+            if config.train_bpe {
+                println!("\n[Legacy mode: --trainBPE detected]");
+                train_bpe(&config);
+            } else if config.do_rl {
+                println!("\n[Legacy mode: --doRL detected — training then RL]");
+                run_train(&config);
+                println!("\nNote: Use separate 'rlvr' command for standalone RL on a pre-trained model.");
+            }
+        }
     }
 }
