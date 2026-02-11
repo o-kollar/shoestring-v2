@@ -9,15 +9,16 @@ A CPU-optimized character-level (or BPE-tokenized) language model written in pur
 1. [Prerequisites](#prerequisites)
 2. [Building](#building)
 3. [Quick Start](#quick-start)
-4. [Configuration Reference](#configuration-reference)
-5. [Training](#training)
-6. [Text Generation](#text-generation)
-7. [Checkpointing](#checkpointing)
-8. [BPE Tokenizer](#bpe-tokenizer)
-9. [Reinforcement Learning (RLVR)](#reinforcement-learning-rlvr)
-10. [Architecture Overview](#architecture-overview)
-11. [Performance Tips](#performance-tips)
-12. [Examples](#examples)
+4. [Commands](#commands)
+5. [Configuration Reference](#configuration-reference)
+6. [Train Tokenizer](#train-tokenizer)
+7. [Train Model](#train-model)
+8. [Inference](#inference)
+9. [RLVR (Reinforcement Learning)](#rlvr-reinforcement-learning)
+10. [Checkpointing](#checkpointing)
+11. [Architecture Overview](#architecture-overview)
+12. [Performance Tips](#performance-tips)
+13. [Full Pipeline Example](#full-pipeline-example)
 
 ---
 
@@ -57,23 +58,46 @@ The release profile is configured with `opt-level = 3`, LTO, and `codegen-units 
 
 ## Quick Start
 
-Run with all defaults (trains on a built-in sample sentence for 500 epochs, then generates text):
+The CLI uses **subcommands** to separate each stage of the pipeline. Running with no command prints help:
 
 ```bash
 cargo run --release
 ```
 
-Train on custom text:
+### Minimal end-to-end example
 
 ```bash
-cargo run --release -- --trainingText="the quick brown fox jumps over the lazy dog"
+# 1. Train a model on inline text
+cargo run --release -- train --trainingText="the quick brown fox jumps over the lazy dog" --epochs=300
+
+# 2. Generate text from the trained checkpoint
+cargo run --release -- inference --loadCheckpoint=./checkpoint.bin --trainingText="the quick brown fox jumps over the lazy dog"
 ```
+
+---
+
+## Commands
+
+| Command            | Purpose                                         |
+|--------------------|------------------------------------------------|
+| `train-tokenizer`  | Train a BPE tokenizer on text data              |
+| `train`            | Train the RNN model (with optional BPE)         |
+| `inference`        | Generate text from a pre-trained model           |
+| `rlvr`             | Run RLVR (GRPO) on a pre-trained model           |
+
+Each command accepts `--key=value` options. The first positional argument (without `--`) is the command.
+
+```bash
+cargo run --release -- <command> [--option=value ...]
+```
+
+Aliases: `inference` can also be written as `generate` or `infer`. `rlvr` can also be written as `rl`.
 
 ---
 
 ## Configuration Reference
 
-All options are passed as `--key=value` command-line arguments.
+All options are passed as `--key=value` command-line arguments after the command name.
 
 ### Model Architecture
 
@@ -93,19 +117,21 @@ All options are passed as `--key=value` command-line arguments.
 | Option           | Default  | Description                                    |
 |------------------|----------|------------------------------------------------|
 | `--trainingText` | *(built-in sample)* | The text corpus to train on          |
+| `--trainingFile` | *(empty)* | Path to a text file for training data         |
 | `--epochs`       | `500`    | Number of training epochs                      |
 | `--learningRate` | `0.001`  | AdamW learning rate                            |
 | `--weightDecay`  | `0.01`   | AdamW weight decay                             |
 | `--batchSize`    | `4`      | Sequences per mini-batch                       |
-| `--seqLength`    | `25`     | Sequence length for BPTT                       |
+| `--seqLength`    | `180`    | Sequence length for BPTT                       |
 | `--logEvery`     | `25`     | Print training stats every N epochs            |
 
-### Generation
+### Inference / Generation
 
 | Option          | Default | Description                         |
 |-----------------|---------|-------------------------------------|
-| `--temperature` | `0.8`   | Sampling temperature (lower = more deterministic) |
+| `--temperature` | `0.3`   | Sampling temperature (lower = more deterministic) |
 | `--genLength`   | `100`   | Number of tokens to generate        |
+| `--prompt`      | *(empty)* | Seed text for generation (inference mode) |
 
 ### Checkpointing
 
@@ -113,15 +139,14 @@ All options are passed as `--key=value` command-line arguments.
 |---------------------|--------------------|--------------------------------------------------|
 | `--savePath`        | `./checkpoint.bin` | Path to save the final checkpoint                |
 | `--saveEvery`       | `0`                | Save intermediate checkpoint every N epochs (0 = off) |
-| `--loadCheckpoint`  | *(empty)*          | Path to load a checkpoint from before training   |
-| `--saveOnComplete`  | `true`             | Save checkpoint when training finishes           |
+| `--loadCheckpoint`  | *(empty)*          | Path to load a checkpoint from (required for `inference` and `rlvr`) |
+| `--saveOnComplete`  | `true`             | Save checkpoint when training/RLVR finishes      |
 
 ### BPE Tokenizer
 
 | Option              | Default              | Description                                     |
 |---------------------|----------------------|-------------------------------------------------|
 | `--useBPE`          | `false`              | Use BPE tokenizer instead of character-level    |
-| `--trainBPE`        | `false`              | Run BPE training mode only (no model training)  |
 | `--bpeVocabSize`    | `512`                | Target vocabulary size for BPE                  |
 | `--bpeSavePath`     | `./tokenizer.json`   | Where to save the trained BPE tokenizer         |
 | `--bpeLoadPath`     | *(empty)*            | Load a pre-trained BPE tokenizer from this path |
@@ -133,40 +158,81 @@ All options are passed as `--key=value` command-line arguments.
 
 | Option            | Default  | Description                                    |
 |-------------------|----------|------------------------------------------------|
-| `--doRL`          | `false`  | Run RL fine-tuning after supervised training   |
 | `--rlTask`        | `copy`   | RL task: `copy`, `reverse`, or `arithmetic`    |
 | `--rlEpisodes`    | `100`    | Number of RL training episodes                 |
 | `--rlLearningRate`| `0.0001` | Learning rate for the RL optimizer             |
 
 ---
 
-## Training
+## Train Tokenizer
 
-### Basic Training
+The `train-tokenizer` command trains a BPE (Byte Pair Encoding) tokenizer independently of the model. This produces a `tokenizer.json` file that can later be used during model training and inference.
+
+### From a file
 
 ```bash
-cargo run --release -- --trainingText="hello world" --epochs=300 --hiddenSize=64
+cargo run --release -- train-tokenizer \
+  --bpeTrainingFile=./corpus.txt \
+  --bpeVocabSize=512 \
+  --bpeSavePath=./tokenizer.json
 ```
 
-The training loop:
-1. Tokenizes the input text (character-level by default)
-2. Creates mini-batches of fixed-length sequences
-3. Runs forward pass → computes cross-entropy loss → backpropagates → updates via AdamW
-4. Logs loss and gradient norms at regular intervals
-5. Generates a sample at the end
-
-### Resume from Checkpoint
+### From inline text
 
 ```bash
-cargo run --release -- --loadCheckpoint=./checkpoint.bin --epochs=1000
+cargo run --release -- train-tokenizer \
+  --bpeTrainingText="your training corpus here" \
+  --bpeVocabSize=256
 ```
 
-Training resumes from the saved epoch and optimizer state.
+### Key options
 
-### Multi-Layer / Larger Models
+- **`--bpeVocabSize`** — Controls how many merge operations to learn (larger = more compression)
+- **`--bpeMinFrequency`** — Pairs occurring less than this many times won't be merged
+- **`--bpeSavePath`** — Output path for the tokenizer JSON file (default: `./tokenizer.json`)
+
+The tokenizer training prioritizes data sources in this order: `--bpeTrainingFile` > `--bpeTrainingText` > `--trainingFile` > `--trainingText`.
+
+---
+
+## Train Model
+
+The `train` command trains the RNN on text data. It supports character-level tokenization (default) or BPE tokenization with a pre-trained tokenizer. Training can start from scratch or resume from a checkpoint.
+
+### Character-level training
 
 ```bash
-cargo run --release -- \
+cargo run --release -- train --trainingText="hello world" --epochs=300 --hiddenSize=64
+```
+
+### Training from a file
+
+```bash
+cargo run --release -- train --trainingFile=./data.txt --epochs=500
+```
+
+### Training with a pre-trained BPE tokenizer
+
+```bash
+cargo run --release -- train \
+  --useBPE=true \
+  --bpeLoadPath=./tokenizer.json \
+  --trainingFile=./data.txt \
+  --epochs=500
+```
+
+### Resume training from a checkpoint
+
+```bash
+cargo run --release -- train --loadCheckpoint=./checkpoint.bin --epochs=1000
+```
+
+Training resumes from the saved epoch and optimizer state. The model architecture is restored from the checkpoint.
+
+### Multi-layer / larger models
+
+```bash
+cargo run --release -- train \
   --hiddenSize=128 \
   --numLayers=3 \
   --embedSize=64 \
@@ -174,23 +240,110 @@ cargo run --release -- \
   --numExperts=4 \
   --topK=2 \
   --epochs=1000 \
-  --learningRate=0.0005
+  --learningRate=0.0005 \
+  --trainingFile=./data.txt
 ```
+
+### What happens during training
+
+1. Tokenizes the input text (character-level or BPE)
+2. Creates mini-batches of fixed-length sequences
+3. Runs forward pass → computes cross-entropy loss → backpropagates → updates via AdamW
+4. Logs loss and gradient norms at regular intervals
+5. Saves checkpoint on completion (and optionally at intervals via `--saveEvery`)
+6. Generates a sample at the end
 
 ---
 
-## Text Generation
+## Inference
 
-Text generation happens automatically after training completes. It uses **temperature-scaled softmax sampling** with the model's hidden state carried across tokens.
+The `inference` command generates text from a pre-trained model checkpoint **without any training**. It requires `--loadCheckpoint`.
 
-Control generation behavior:
+### Basic generation
 
 ```bash
-cargo run --release -- --temperature=0.5 --genLength=200
+cargo run --release -- inference \
+  --loadCheckpoint=./checkpoint.bin \
+  --trainingText="the quick brown fox jumps over the lazy dog"
 ```
 
-- **Lower temperature** (e.g., `0.3`) → more deterministic, repetitive output
-- **Higher temperature** (e.g., `1.2`) → more creative, potentially noisy output
+> **Note:** You must provide the same training data source (via `--trainingText`, `--trainingFile`, or `--useBPE` + `--bpeLoadPath`) so the vocabulary mapping is reconstructed correctly.
+
+### Generation with a prompt
+
+Use `--prompt` to seed the model with specific text before generating:
+
+```bash
+cargo run --release -- inference \
+  --loadCheckpoint=./checkpoint.bin \
+  --trainingFile=./data.txt \
+  --prompt="hello" \
+  --temperature=0.5 \
+  --genLength=200
+```
+
+The prompt is fed through the model token-by-token to build up the hidden state, then generation continues from that context.
+
+### With BPE tokenizer
+
+```bash
+cargo run --release -- inference \
+  --loadCheckpoint=./checkpoint.bin \
+  --useBPE=true \
+  --bpeLoadPath=./tokenizer.json \
+  --trainingFile=./data.txt \
+  --genLength=200
+```
+
+### Generation parameters
+
+- **`--temperature`** — Controls randomness. Lower (e.g., `0.3`) = more deterministic; higher (e.g., `1.2`) = more creative
+- **`--genLength`** — Number of tokens to generate (default: 100)
+- **`--prompt`** — Optional seed text to condition generation on
+
+---
+
+## RLVR (Reinforcement Learning)
+
+The `rlvr` command runs **GRPO** (Group Relative Policy Optimization) on a pre-trained model checkpoint. This fine-tunes the model on verifiable tasks without needing additional supervised data.
+
+### Available Tasks
+
+| Task         | Prompt Format | Expected Output  | Example              |
+|--------------|---------------|------------------|----------------------|
+| `copy`       | `abc:`        | `abc`            | `hello:` → `hello`  |
+| `reverse`    | `abc>`        | `cba`            | `hello>` → `olleh`  |
+| `arithmetic` | `3+5=`        | `8`              | `3*4=` → `12`       |
+
+### Run RLVR on a pre-trained model
+
+```bash
+cargo run --release -- rlvr \
+  --loadCheckpoint=./checkpoint.bin \
+  --trainingText="the quick brown fox jumps over the lazy dog" \
+  --rlTask=copy \
+  --rlEpisodes=200 \
+  --rlLearningRate=0.0001
+```
+
+### Arithmetic fine-tuning
+
+```bash
+cargo run --release -- rlvr \
+  --loadCheckpoint=./checkpoint.bin \
+  --trainingText="0123456789+-*=" \
+  --rlTask=arithmetic \
+  --rlEpisodes=500
+```
+
+### What happens during RLVR
+
+1. Loads model weights from the checkpoint
+2. For each episode, generates a random prompt for the task
+3. Samples multiple completions and scores them with a verifiable reward function
+4. Computes advantages via z-scored rewards (GRPO)
+5. Updates the policy with a single gradient step per episode
+6. Saves the fine-tuned model on completion
 
 ---
 
@@ -202,72 +355,25 @@ Checkpoints are saved in a compact **bincode binary format** containing:
 - Model architecture config (hidden size, layers, etc.)
 - Metadata (epoch, loss, timestamp)
 
-### Save Periodically During Training
+### Save periodically during training
 
 ```bash
-cargo run --release -- --saveEvery=50 --savePath=./model.bin
+cargo run --release -- train --saveEvery=50 --savePath=./model.bin --trainingFile=./data.txt
 ```
 
 This creates `model_epoch50.bin`, `model_epoch100.bin`, etc., plus a final `model.bin`.
 
-### Load and Continue
+### Load and continue training
 
 ```bash
-cargo run --release -- --loadCheckpoint=./model.bin --epochs=2000
+cargo run --release -- train --loadCheckpoint=./model.bin --epochs=2000
 ```
 
----
-
-## BPE Tokenizer
-
-The built-in BPE (Byte Pair Encoding) tokenizer can compress text into sub-word tokens for more efficient training on larger corpora.
-
-### Step 1: Train a BPE Tokenizer
+### Use a checkpoint for inference
 
 ```bash
-cargo run --release -- --trainBPE=true --bpeVocabSize=512 --bpeTrainingFile=./corpus.txt --bpeSavePath=./tokenizer.json
+cargo run --release -- inference --loadCheckpoint=./model.bin --trainingFile=./data.txt
 ```
-
-This outputs a `tokenizer.json` file with the learned merge rules and vocabulary.
-
-### Step 2: Train the Model with BPE
-
-```bash
-cargo run --release -- --useBPE=true --bpeLoadPath=./tokenizer.json --trainingText="your training text here" --epochs=500
-```
-
-### Train BPE from Inline Text
-
-```bash
-cargo run --release -- --trainBPE=true --bpeTrainingText="your training corpus here" --bpeVocabSize=256
-```
-
----
-
-## Reinforcement Learning (RLVR)
-
-After supervised pre-training, you can fine-tune the model with **GRPO** (Group Relative Policy Optimization) on verifiable tasks.
-
-### Available Tasks
-
-| Task         | Prompt Format | Expected Output  | Example              |
-|--------------|---------------|------------------|----------------------|
-| `copy`       | `abc:`        | `abc`            | `hello:` → `hello`  |
-| `reverse`    | `abc>`        | `cba`            | `hello>` → `olleh`  |
-| `arithmetic` | `3+5=`        | `8`              | `3*4=` → `12`       |
-
-### Run RL Fine-Tuning
-
-```bash
-cargo run --release -- \
-  --epochs=500 \
-  --doRL=true \
-  --rlTask=copy \
-  --rlEpisodes=200 \
-  --rlLearningRate=0.0001
-```
-
-The RL phase runs after supervised training completes, then generates a post-RL sample.
 
 ---
 
@@ -342,30 +448,27 @@ Input Token
 6. **Set `RAYON_NUM_THREADS`** environment variable to control parallelism:
    ```bash
    set RAYON_NUM_THREADS=4
-   cargo run --release -- --numExperts=8
+   cargo run --release -- train --numExperts=8
    ```
 
 ---
 
-## Examples
+## Full Pipeline Example
 
-### Minimal Character-Level Training
-
-```bash
-cargo run --release -- --trainingText="abcabcabc" --hiddenSize=16 --epochs=200
-```
-
-### Full-Featured Training Pipeline
+A complete workflow from tokenizer training through RL fine-tuning:
 
 ```bash
 # 1. Train a BPE tokenizer on a corpus file
-cargo run --release -- --trainBPE=true --bpeTrainingFile=./data.txt --bpeVocabSize=1024
+cargo run --release -- train-tokenizer \
+  --bpeTrainingFile=./data.txt \
+  --bpeVocabSize=1024 \
+  --bpeSavePath=./tokenizer.json
 
 # 2. Train the model using BPE tokens
-cargo run --release -- \
+cargo run --release -- train \
   --useBPE=true \
   --bpeLoadPath=./tokenizer.json \
-  --trainingText="$(cat ./data.txt)" \
+  --trainingFile=./data.txt \
   --hiddenSize=128 \
   --numLayers=2 \
   --embedSize=64 \
@@ -373,11 +476,22 @@ cargo run --release -- \
   --saveEvery=100 \
   --savePath=./model.bin
 
-# 3. Fine-tune with RL on arithmetic
-cargo run --release -- \
+# 3. Generate text from the trained model
+cargo run --release -- inference \
   --loadCheckpoint=./model.bin \
-  --epochs=0 \
-  --doRL=true \
+  --useBPE=true \
+  --bpeLoadPath=./tokenizer.json \
+  --trainingFile=./data.txt \
+  --prompt="Once upon" \
+  --temperature=0.5 \
+  --genLength=200
+
+# 4. Fine-tune with RL on arithmetic
+cargo run --release -- rlvr \
+  --loadCheckpoint=./model.bin \
+  --useBPE=true \
+  --bpeLoadPath=./tokenizer.json \
+  --trainingFile=./data.txt \
   --rlTask=arithmetic \
   --rlEpisodes=500
 ```
@@ -385,7 +499,7 @@ cargo run --release -- \
 ### Quick Smoke Test
 
 ```bash
-cargo run --release -- --hiddenSize=16 --epochs=50 --fastMode=true --logEvery=10
+cargo run --release -- train --hiddenSize=16 --epochs=50 --fastMode=true --logEvery=10
 ```
 
 ---
@@ -404,12 +518,23 @@ Saved binary checkpoint to ./checkpoint.bin (0.15 MB)
 
 Generating sample...
 
-Temperature: 0.8
+Temperature: 0.3
 Generated (100 tokens):
 ----------------------------------------------------------------------
 hello world this is a modern rnn with rmsnorm residual connections...
 ----------------------------------------------------------------------
 ```
+
+---
+
+## Legacy Flag Support
+
+For backward compatibility, the old flag-based usage still works when no subcommand is provided:
+
+- `--trainBPE=true` → equivalent to the `train-tokenizer` command
+- `--doRL=true` → runs training then RL (use separate `train` + `rlvr` commands instead)
+
+These are deprecated; prefer the subcommand-based interface.
 
 ---
 
