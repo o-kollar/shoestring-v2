@@ -1,4 +1,4 @@
-# A CPU-optimized character-level (or BPE-tokenized) language model written in pure Rust. 
+# A CPU-optimized language model written in pure Rust. 
 It features a Mixture-of-Experts **GRU + RWKV hybrid architecture**.
 ---
 
