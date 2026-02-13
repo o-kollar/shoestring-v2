@@ -1,5 +1,4 @@
 # A CPU-optimized language model. 
----
 
 ## Table of Contents
 
@@ -375,54 +374,6 @@ cargo run --release -- inference --loadCheckpoint=./model.bin --trainingFile=./d
 ---
 
 ## Architecture Overview
-
-```
-Input Token
-    │
-    ▼
-┌──────────┐
-│ Embedding │  (vocab_size × embed_size)
-└──────────┘
-    │
-    ▼
-┌───────────────────────────────────┐
-│  ModernRNNLayer (× num_layers)    │
-│                                   │
-│  ┌─────────────────────────────┐  │
-│  │ ModernGRUCell               │  │
-│  │  • RMSNorm on input/hidden  │  │
-│  │  • GRU gates (z, r, h_cand) │  │
-│  │  • RWKV linear attention    │  │
-│  │    (token-shift mixing,     │  │
-│  │     dynamic decay, WKV)     │  │
-│  └─────────────────────────────┘  │
-│           │                       │
-│           ▼                       │
-│  ┌─────────────────────────────┐  │
-│  │ Mixture of Experts (MoE)    │  │
-│  │  • RMSNorm                  │  │
-│  │  • Router (softmax top-k)   │  │
-│  │  • SwiGLU Expert FFNs       │  │
-│  │  • Always-on expert 0       │  │
-│  │  • Rayon-parallel forward   │  │
-│  └─────────────────────────────┘  │
-│           │                       │
-│     + Residual Connection         │
-└───────────────────────────────────┘
-    │
-    ▼
-┌──────────┐
-│ RMSNorm  │
-└──────────┘
-    │
-    ▼
-┌──────────────┐
-│ Output Proj  │  (hidden_size × vocab_size)
-└──────────────┘
-    │
-    ▼
-  Logits → Softmax → Sample / Cross-Entropy Loss
-```
 
 ### Key Components
 
