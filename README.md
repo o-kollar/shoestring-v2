@@ -1,5 +1,4 @@
 # A CPU-optimized language model. 
-Mixture-of-Experts **GRU + RWKV hybrid architecture**.
 ---
 
 ## Table of Contents
